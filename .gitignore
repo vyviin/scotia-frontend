@@ -4,3 +4,12 @@ dist
 *.log
 .env
 .env.local
+
+# Python / Django
+__pycache__/
+*.py[cod]
+*.sqlite3
+db.sqlite3
+.venv/
+venv/
+*.egg-info/
