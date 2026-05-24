@@ -172,7 +172,6 @@ export default function ScotiaDecoded() {
   const [toastMsg, setToastMsg] = useState("");
   const [captionIdx, setCaptionIdx] = useState(0);
   const [aiTyping, setAiTyping] = useState(false);
-  const [msgIndex, setMsgIndex] = useState(0);
   const chatRef = useRef(null);
 
   const CAPTIONS = [
@@ -191,19 +190,24 @@ export default function ScotiaDecoded() {
   // Drip AI messages on dashboard
   useEffect(() => {
     if (step !== 4 || !vibe) return;
-    const msgs = AI_MESSAGES[vibe];
-    if (msgIndex >= msgs.length) return;
+    const msgs = (AI_MESSAGES[vibe] || []).filter(m => m && typeof m.text === 'string');
     setChatMessages([]);
-    setMsgIndex(0);
     setAiTyping(true);
     let idx = 0;
+    let cancelled = false;
+    const timers = [];
     const drip = () => {
+      if (cancelled) return;
       if (idx >= msgs.length) { setAiTyping(false); return; }
-      setChatMessages(prev => [...prev, msgs[idx]]);
+      const msg = msgs[idx];
+      if (msg) setChatMessages(prev => [...prev, msg]);
       idx++;
-      setTimeout(drip, 1800);
+      const t = setTimeout(drip, 1800);
+      timers.push(t);
     };
-    setTimeout(drip, 600);
+    const t = setTimeout(drip, 600);
+    timers.push(t);
+    return () => { cancelled = true; timers.forEach(clearTimeout); };
   }, [step, vibe]);
 
   useEffect(() => {
@@ -217,11 +221,9 @@ export default function ScotiaDecoded() {
   };
 
   const goTo = (s) => {
+    if (s === 4 && !vibe) setVibe("nervous");
+    setChatMessages([]);
     setStep(s);
-    if (s === 4 && vibe) {
-      setChatMessages([]);
-      setMsgIndex(0);
-    }
   };
 
   const handleVibeSelect = (v) => {
@@ -433,7 +435,7 @@ export default function ScotiaDecoded() {
                 </div>
 
                 <button
-                  onClick={() => setStep(4)}
+                  onClick={() => { if (!vibe) setVibe("nervous"); setStep(4); }}
                   className="w-full py-3.5 rounded-2xl bg-red-600 text-white font-bold text-base flex items-center justify-center gap-2 hover:bg-red-500 transition-all duration-300 active:scale-95 shadow-lg shadow-red-600/30"
                 >
                   Show me the full picture <ChevronRight size={18} />
@@ -488,7 +490,7 @@ export default function ScotiaDecoded() {
                     {aiTyping && <div className="ml-auto flex gap-1"><span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce" style={{ animationDelay: "0ms" }} /><span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce" style={{ animationDelay: "150ms" }} /><span className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce" style={{ animationDelay: "300ms" }} /></div>}
                   </div>
                   <div ref={chatRef} className="flex-1 overflow-y-auto px-3 py-2 space-y-2 scrollbar-hide">
-                    {chatMessages.map((msg, i) => (
+                    {chatMessages.filter(msg => msg && msg.text).map((msg, i) => (
                       <div key={i} className="flex items-start gap-2">
                         <div className="w-5 h-5 rounded-full bg-red-600/80 flex-shrink-0 flex items-center justify-center mt-0.5"><Sparkles size={8} className="text-white" /></div>
                         <p className="text-zinc-300 text-xs leading-relaxed">{msg.text}</p>
