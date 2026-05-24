@@ -1,11 +1,30 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import {
   Heart, MessageCircle, Share2, Bookmark, Music2,
   ChevronRight, X, TrendingUp, TrendingDown,
   BarChart2, Info, Zap, DollarSign, ArrowRight,
-  CheckCircle, Sparkles, Volume2, Play, ChevronUp,
-  AlertCircle, Star, Send
+  CheckCircle, Sparkles, Volume2, Play, Pause, ChevronUp,
+  AlertCircle, Star, Send, RotateCcw
 } from "lucide-react";
+import { fetchReplayCandles } from "../api/replayCandles";
+import { createDemoTrade, getDemoPnl } from "../api/demoTrades";
+import {
+  SCENARIO_TITLE,
+  scalpScenarioEvents,
+  deriveScenarioLevels,
+  getActiveEvent,
+  getVisibleLevelKeys,
+  getSwingLabels,
+} from "../scenarios/scalpScenario";
+import ScenarioReplayChart from "./replay/ScenarioReplayChart";
+import AgentCommentaryPanel from "./replay/AgentCommentaryPanel";
+import LessonTimeline from "./replay/LessonTimeline";
+import TradeControlsPanel from "./replay/TradeControlsPanel";
+import TavusMentorPanel from "./replay/TavusMentorPanel";
+
+const REPLAY_CANDLE_INTERVAL_MS = 2500;
+/** Auto-pause duration when a scenario event fires (coach explains setup). */
+const REPLAY_EVENT_PAUSE_MS = 16000;
 
 // ─── Tiny sparkline SVG ──────────────────────────────────────────────────────
 function Sparkline({ data, color = "#22c55e", width = 80, height = 32, yMin, yMax }) {
@@ -25,34 +44,40 @@ function Sparkline({ data, color = "#22c55e", width = 80, height = 32, yMin, yMa
 }
 
 // ─── Candlestick Chart ────────────────────────────────────────────────────────
-function CandlestickChart({ activeTooltip, onTermClick }) {
-  const candles = [
-    { o: 68, h: 72, l: 65, c: 70 }, { o: 70, h: 75, l: 69, c: 73 },
-    { o: 73, h: 74, l: 68, c: 69 }, { o: 69, h: 71, l: 64, c: 65 },
-    { o: 65, h: 68, l: 63, c: 67 }, { o: 67, h: 72, l: 66, c: 71 },
-    { o: 71, h: 76, l: 70, c: 75 }, { o: 75, h: 78, l: 72, c: 74 },
-    { o: 74, h: 77, l: 71, c: 76 }, { o: 76, h: 82, l: 75, c: 80 },
-    { o: 80, h: 83, l: 78, c: 79 }, { o: 79, h: 81, l: 75, c: 77 },
-    { o: 77, h: 80, l: 74, c: 78 }, { o: 78, h: 84, l: 77, c: 83 },
-    { o: 83, h: 87, l: 81, c: 86 }, { o: 86, h: 88, l: 82, c: 84 },
-  ];
-  const minP = 60, maxP = 92, range = maxP - minP;
+function CandlestickChart({ candles = [], activeTooltip, onTermClick }) {
   const W = 560, H = 200, pad = 10;
+
+  if (candles.length === 0) {
+    return (
+      <div className="relative w-full flex items-center justify-center" style={{ height: 200 }}>
+        <span className="text-zinc-500 text-sm">No candles to display</span>
+      </div>
+    );
+  }
+
+  const rawMin = Math.min(...candles.map((c) => c.l));
+  const rawMax = Math.max(...candles.map((c) => c.h));
+  const padPct = (rawMax - rawMin) * 0.02 || 1;
+  const minP = rawMin - padPct;
+  const maxP = rawMax + padPct;
+  const range = maxP - minP || 1;
   const toY = (v) => pad + ((maxP - v) / range) * (H - pad * 2);
   const candleW = (W / candles.length) * 0.5;
+  const xDenom = Math.max(candles.length - 1, 1);
+  const support = Math.min(...candles.map((c) => c.l));
+  const resistance = Math.max(...candles.map((c) => c.h));
 
-  // MA line
   const maData = candles.map((c, i) => {
     const slice = candles.slice(Math.max(0, i - 4), i + 1);
     return slice.reduce((s, x) => s + x.c, 0) / slice.length;
   });
   const maPath = maData.map((v, i) => {
-    const x = (i / (candles.length - 1)) * (W - pad * 2) + pad + candleW / 2;
+    const x = (i / xDenom) * (W - pad * 2) + pad + candleW / 2;
     return `${i === 0 ? "M" : "L"} ${x} ${toY(v)}`;
   }).join(" ");
 
-  const supportY = toY(67);
-  const resistY = toY(83);
+  const supportY = toY(support);
+  const resistY = toY(resistance);
 
   return (
     <div className="relative w-full">
@@ -69,7 +94,7 @@ function CandlestickChart({ activeTooltip, onTermClick }) {
         <path d={maPath} fill="none" stroke="#fbbf24" strokeWidth="1.5" opacity="0.8" />
         {/* Candles */}
         {candles.map((c, i) => {
-          const x = (i / (candles.length - 1)) * (W - pad * 2) + pad;
+          const x = (i / xDenom) * (W - pad * 2) + pad;
           const bullish = c.c >= c.o;
           const color = bullish ? "#22c55e" : "#ef4444";
           const bodyTop = toY(Math.max(c.o, c.c));
@@ -92,7 +117,7 @@ function CandlestickChart({ activeTooltip, onTermClick }) {
           { id: "rsi", label: "RSI 58", color: "text-yellow-400 border-yellow-400/40 bg-yellow-400/10" },
           { id: "ma", label: "MA Cross ↑", color: "text-amber-300 border-amber-300/40 bg-amber-300/10" },
           { id: "volume", label: "Vol 2.4M", color: "text-blue-400 border-blue-400/40 bg-blue-400/10" },
-          { id: "support", label: "Support $67", color: "text-purple-400 border-purple-400/40 bg-purple-400/10" },
+          { id: "support", label: `Support $${support.toFixed(2)}`, color: "text-purple-400 border-purple-400/40 bg-purple-400/10" },
           { id: "dividend", label: "Div 3.2%", color: "text-green-400 border-green-400/40 bg-green-400/10" },
         ].map((term) => (
           <button
@@ -187,6 +212,24 @@ export default function ScotiaDecoded() {
   const [horizon, setHorizon] = useState("1y");
   const chatRef = useRef(null);
 
+  const [allCandles, setAllCandles] = useState([]);
+  const [replaySymbol, setReplaySymbol] = useState("SPY");
+  const [replayTimeframe, setReplayTimeframe] = useState("15m");
+  const [visibleCount, setVisibleCount] = useState(1);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [replaySpeed, setReplaySpeed] = useState(0.5);
+  const [candlesLoadStatus, setCandlesLoadStatus] = useState("idle");
+  const [eventPulseKey, setEventPulseKey] = useState(null);
+  const [tradeQuantity, setTradeQuantity] = useState(2);
+  const [pnlData, setPnlData] = useState(null);
+  const [tradeMarkers, setTradeMarkers] = useState([]);
+  const [isTradeSubmitting, setIsTradeSubmitting] = useState(false);
+  const [pnlRefreshKey, setPnlRefreshKey] = useState(0);
+  const [replayResetKey, setReplayResetKey] = useState(0);
+  const [coachPauseActive, setCoachPauseActive] = useState(false);
+  const prevScenarioEventRef = useRef(null);
+  const isPlayingRef = useRef(isPlaying);
+
   const CAPTIONS = [
     { tag: "💰 TFSA Cheat Code", text: "Your TFSA is literally a cheat code that nobody told us about... bestie 💀 tax-free growth on EVERYTHING" },
     { tag: "📈 Investing 101", text: "POV: You finally understand what a stock actually is and why everyone's obsessed 👀" },
@@ -224,8 +267,203 @@ export default function ScotiaDecoded() {
   }, [step, vibe]);
 
   useEffect(() => {
+    if (step !== 4) return;
+    let cancelled = false;
+    setCandlesLoadStatus("loading");
+    setIsPlaying(false);
+    fetchReplayCandles({ symbol: "SPY", timeframe: "15m" })
+      .then((data) => {
+        if (cancelled) return;
+        setAllCandles(data.candles);
+        setReplaySymbol(data.symbol);
+        setReplayTimeframe(data.timeframe);
+        setVisibleCount(data.candles.length > 0 ? 1 : 0);
+        setCandlesLoadStatus("ready");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setAllCandles([]);
+        setCandlesLoadStatus("error");
+      });
+    return () => { cancelled = true; };
+  }, [step]);
+
+  useEffect(() => {
+    if (!isPlaying || allCandles.length === 0) return;
+    const intervalMs = REPLAY_CANDLE_INTERVAL_MS / replaySpeed;
+    const id = setInterval(() => {
+      setVisibleCount((n) => {
+        if (n >= allCandles.length) {
+          setIsPlaying(false);
+          return n;
+        }
+        const next = n + 1;
+        if (next >= allCandles.length) setIsPlaying(false);
+        return next;
+      });
+    }, intervalMs);
+    return () => clearInterval(id);
+  }, [isPlaying, replaySpeed, allCandles.length]);
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
+
+  useEffect(() => {
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
   }, [chatMessages]);
+
+  const visibleCandles = allCandles.slice(0, visibleCount);
+  const lastClose = visibleCandles.length > 0 ? visibleCandles[visibleCandles.length - 1].c : null;
+  const tradeControlsDisabled = lastClose == null || candlesLoadStatus !== "ready";
+
+  const { levels: scenarioLevels, chartBounds: scenarioChartBounds } = useMemo(
+    () => deriveScenarioLevels(allCandles),
+    [allCandles]
+  );
+  const activeScenarioEvent = useMemo(
+    () => getActiveEvent(scalpScenarioEvents, visibleCount),
+    [visibleCount]
+  );
+
+  useEffect(() => {
+    if (!activeScenarioEvent) return undefined;
+    const eventType = activeScenarioEvent.type;
+    const prevType = prevScenarioEventRef.current;
+    prevScenarioEventRef.current = eventType;
+
+    if (prevType === null || prevType === eventType || !isPlayingRef.current) {
+      return undefined;
+    }
+
+    setIsPlaying(false);
+    setCoachPauseActive(true);
+    const resumeTimer = setTimeout(() => {
+      setIsPlaying(true);
+      setCoachPauseActive(false);
+    }, REPLAY_EVENT_PAUSE_MS);
+    return () => {
+      clearTimeout(resumeTimer);
+      setCoachPauseActive(false);
+    };
+  }, [activeScenarioEvent?.type]);
+
+  const visibleLevelKeys = useMemo(
+    () => getVisibleLevelKeys(scalpScenarioEvents, visibleCount),
+    [visibleCount]
+  );
+  const swingLabels = useMemo(
+    () => getSwingLabels(visibleCount, allCandles),
+    [visibleCount, allCandles]
+  );
+
+  const confirmationCandleIndex = useMemo(
+    () => scalpScenarioEvents.find((e) => e.type === "confirmation")?.candleIndex ?? 12,
+    []
+  );
+  const isConfirmationActive = activeScenarioEvent?.type === "confirmation";
+  const isBeforeConfirmation =
+    visibleCount > 0 && visibleCount - 1 < confirmationCandleIndex && !isConfirmationActive;
+
+  const chartTradeMarkers = useMemo(
+    () =>
+      tradeMarkers
+        .map((m) => {
+          const candle = visibleCandles[m.anchorIndex];
+          if (!candle) return null;
+          return { ...m, candle };
+        })
+        .filter(Boolean),
+    [tradeMarkers, visibleCandles]
+  );
+
+  const refreshDemoPnl = async () => {
+    if (lastClose == null || !replaySymbol) return;
+    try {
+      const data = await getDemoPnl({ symbol: replaySymbol, current_price: lastClose });
+      setPnlData(data);
+    } catch {
+      setPnlData((prev) => prev ?? { open_trades: [], total_unrealized_pnl: 0 });
+    }
+  };
+
+  useEffect(() => {
+    if (step !== 4 || lastClose == null || candlesLoadStatus !== "ready") return;
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const data = await getDemoPnl({ symbol: replaySymbol, current_price: lastClose });
+        if (!cancelled) setPnlData(data);
+      } catch {
+        if (!cancelled) {
+          setPnlData((prev) =>
+            prev ?? { symbol: replaySymbol, open_trades: [], total_unrealized_pnl: 0 }
+          );
+        }
+      }
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [step, lastClose, replaySymbol, candlesLoadStatus, visibleCount, pnlRefreshKey]);
+
+  useEffect(() => {
+    if (step !== 4) {
+      setPnlData(null);
+      setTradeMarkers([]);
+    }
+  }, [step]);
+
+  const handleDemoTrade = async (side) => {
+    if (tradeControlsDisabled || isTradeSubmitting) return;
+    const qty = Math.max(1, Number(tradeQuantity) || 2);
+    const entryPrice = lastClose;
+    setIsTradeSubmitting(true);
+    try {
+      await createDemoTrade({
+        side,
+        symbol: replaySymbol,
+        quantity: qty,
+        entry_price: entryPrice,
+      });
+      setTradeMarkers((prev) => [
+        ...prev,
+        { id: Date.now(), anchorIndex: visibleCount - 1, side },
+      ]);
+      setPnlRefreshKey((k) => k + 1);
+      await refreshDemoPnl();
+      showToast(`Demo ${side} filled: ${qty} ${replaySymbol} @ $${entryPrice.toFixed(2)}`);
+    } catch {
+      showToast("Could not place demo trade. Is Django running?");
+    } finally {
+      setIsTradeSubmitting(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!activeScenarioEvent) return;
+    setEventPulseKey(activeScenarioEvent.type);
+    const t = setTimeout(() => setEventPulseKey(null), 600);
+    return () => clearTimeout(t);
+  }, [activeScenarioEvent?.type]);
+
+  const handleReplayPlayPause = () => {
+    if (allCandles.length === 0) return;
+    if (isPlaying) {
+      setIsPlaying(false);
+      return;
+    }
+    if (visibleCount >= allCandles.length) {
+      setVisibleCount(1);
+    }
+    setIsPlaying(true);
+  };
+
+  const handleReplayReset = () => {
+    setIsPlaying(false);
+    setVisibleCount(allCandles.length > 0 ? 1 : 0);
+    prevScenarioEventRef.current = null;
+    setReplayResetKey((k) => k + 1);
+  };
 
   const showToast = (msg) => {
     setToastMsg(msg);
@@ -520,22 +758,167 @@ export default function ScotiaDecoded() {
 
             {/* ── STEP 4: Decoded Dashboard ── */}
             {step === 4 && (
-              <div className="flex flex-col h-full min-h-[680px] bg-zinc-950">
+              <div className="flex flex-col h-full min-h-[680px] max-h-[680px] bg-zinc-950 overflow-y-auto">
                 {/* Header */}
-                <div className="px-5 pt-14 pb-2 flex items-center justify-between">
+                <div className="px-5 pt-14 pb-2 flex items-center justify-between flex-shrink-0">
                   <div>
                     <div className="text-xs font-bold text-zinc-500 uppercase tracking-widest">iTRADE Decoded</div>
-                    <div className="text-white font-black text-lg">RY.TO <span className="text-green-400 text-sm font-bold">▲ +2.3%</span></div>
+                    <div className="text-white font-black text-lg">
+                      {candlesLoadStatus === "ready" ? (
+                        <>
+                          {replaySymbol}{" "}
+                          <span className="text-zinc-400 text-sm font-semibold">{replayTimeframe}</span>
+                        </>
+                      ) : (
+                        <span className="text-zinc-400 text-sm font-semibold">SPY · 15m</span>
+                      )}
+                    </div>
                   </div>
                   <div className="text-right">
                     <div className="text-zinc-400 text-xs">Current Price</div>
-                    <div className="text-white font-black text-xl">$86.42</div>
+                    <div className="text-white font-black text-xl">
+                      {lastClose != null ? `$${lastClose.toFixed(2)}` : "—"}
+                    </div>
                   </div>
                 </div>
 
-                {/* Chart area */}
-                <div className="px-4 pb-2">
-                  <CandlestickChart activeTooltip={activeTooltip} onTermClick={(id) => setActiveTooltip(activeTooltip === id ? null : id)} />
+                {/* Chart area — scripted scalp replay */}
+                <div className="px-4 pb-2 space-y-3">
+                  {(candlesLoadStatus === "loading" || candlesLoadStatus === "idle") && (
+                    <div className="flex items-center justify-center py-16">
+                      <span className="text-zinc-400 text-sm">Loading candles...</span>
+                    </div>
+                  )}
+                  {candlesLoadStatus === "error" && (
+                    <div className="flex flex-col items-center justify-center gap-2 py-12 px-4 text-center">
+                      <AlertCircle size={24} className="text-red-500" />
+                      <p className="text-zinc-300 text-sm">
+                        Could not load replay candles. Is Django running on port 8000?
+                      </p>
+                    </div>
+                  )}
+                  {candlesLoadStatus === "ready" && (
+                    <>
+                      <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full border border-green-500/30 bg-green-500/5">
+                        <span className="text-[10px] font-bold uppercase tracking-widest text-green-400">
+                          {SCENARIO_TITLE}
+                        </span>
+                      </div>
+
+                      <ScenarioReplayChart
+                        visibleCandles={visibleCandles}
+                        chartBounds={scenarioChartBounds}
+                        levels={scenarioLevels}
+                        visibleLevelKeys={visibleLevelKeys}
+                        swingLabels={swingLabels}
+                        tradeMarkers={chartTradeMarkers}
+                        isPlaying={isPlaying}
+                        totalCandleCount={allCandles.length}
+                      />
+
+                      <TradeControlsPanel
+                        compact
+                        symbol={replaySymbol}
+                        quantity={tradeQuantity}
+                        onQuantityChange={setTradeQuantity}
+                        currentPrice={lastClose}
+                        totalUnrealizedPnl={pnlData?.total_unrealized_pnl ?? 0}
+                        tradeCount={pnlData?.open_trades?.length ?? 0}
+                        openTrades={pnlData?.open_trades ?? []}
+                        onBuy={() => handleDemoTrade("BUY")}
+                        onSell={() => handleDemoTrade("SELL")}
+                        disabled={tradeControlsDisabled}
+                        isSubmitting={isTradeSubmitting}
+                        isConfirmationActive={isConfirmationActive}
+                        isBeforeConfirmation={isBeforeConfirmation}
+                      />
+
+                      {!isPlaying && visibleCount <= 1 && (
+                        <p className="text-center text-xs text-green-400/90 font-medium py-1">
+                          Press Play to start the scalp replay.
+                        </p>
+                      )}
+                      {!isPlaying && visibleCount > 1 && visibleCount < allCandles.length && (
+                        <p className="text-center text-[10px] text-zinc-500 font-mono">
+                          Paused — press Play to continue
+                        </p>
+                      )}
+
+                      <AgentCommentaryPanel
+                        activeEvent={activeScenarioEvent}
+                        visibleCount={visibleCount}
+                        totalCandles={allCandles.length}
+                        isPlaying={isPlaying}
+                        pulseKey={eventPulseKey}
+                        compact
+                      />
+
+                      <TavusMentorPanel
+                        activeScenarioEvent={activeScenarioEvent}
+                        currentCandleIndex={Math.max(0, visibleCount - 1)}
+                        replayResetKey={replayResetKey}
+                        pnlRefreshKey={pnlRefreshKey}
+                        symbol={replaySymbol}
+                        timeframe={replayTimeframe}
+                        scenarioLevels={scenarioLevels}
+                        pnlData={pnlData}
+                        visibleCount={visibleCount}
+                        currentPrice={lastClose}
+                        compact
+                      />
+
+                      <LessonTimeline
+                        events={scalpScenarioEvents}
+                        visibleCount={visibleCount}
+                        activeEvent={activeScenarioEvent}
+                        compact
+                      />
+
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={handleReplayPlayPause}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-200 text-xs font-semibold hover:bg-zinc-700 transition-colors"
+                          >
+                            {isPlaying ? <Pause size={12} /> : <Play size={12} className="text-green-500" />}
+                            {isPlaying ? "Pause" : "Play"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleReplayReset}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-200 text-xs font-semibold hover:bg-zinc-700 transition-colors"
+                          >
+                            <RotateCcw size={12} />
+                            Reset
+                          </button>
+                          <span className="text-zinc-500 text-xs">Speed:</span>
+                          {[0.25, 0.5, 1].map((s) => (
+                            <button
+                              key={s}
+                              type="button"
+                              onClick={() => setReplaySpeed(s)}
+                              className={`px-2 py-1 rounded text-xs font-mono font-semibold border transition-colors ${
+                                replaySpeed === s
+                                  ? "bg-red-600/20 border-red-500/50 text-red-400"
+                                  : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-zinc-200"
+                              }`}
+                            >
+                              {s}x
+                            </button>
+                          ))}
+                        </div>
+                        {coachPauseActive && (
+                          <p className="text-center text-[10px] text-amber-400/90 font-medium">
+                            Coach pause: mentor explaining this setup...
+                          </p>
+                        )}
+                        <p className="text-zinc-500 text-xs font-mono">
+                          {replaySymbol} · {replayTimeframe} · Candle {visibleCount} / {allCandles.length}
+                        </p>
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 {/* Tooltip popover */}
@@ -663,10 +1046,54 @@ export default function ScotiaDecoded() {
               {step === 1 && "Social media reel with rotating captions and pulsing CTA button. Simulates organic Gen Z discovery."}
               {step === 2 && "Vibe Check onboarding — selecting a card personalizes the AI Guide's tone across the entire journey."}
               {step === 3 && "Hyper-personalized insight using real account data. Side-by-side comparison shows concrete opportunity cost."}
-              {step === 4 && "Decoded Dashboard with interactive financial term pills. Tap any pill for a Gen Z translation. AI chat updates based on selected vibe."}
+              {step === 4 && "Guided scalp replay: scenario timeline, agent commentary, and progressive chart levels on SPY 15m candles. AI chat still reflects selected vibe."}
               {step === 5 && "Decision point with two clear paths. Paper trading lowers the barrier to entry with zero risk."}
             </div>
           </div>
+
+          {step === 4 && candlesLoadStatus === "ready" && (
+            <>
+              <TradeControlsPanel
+                symbol={replaySymbol}
+                quantity={tradeQuantity}
+                onQuantityChange={setTradeQuantity}
+                currentPrice={lastClose}
+                totalUnrealizedPnl={pnlData?.total_unrealized_pnl ?? 0}
+                tradeCount={pnlData?.open_trades?.length ?? 0}
+                openTrades={pnlData?.open_trades ?? []}
+                onBuy={() => handleDemoTrade("BUY")}
+                onSell={() => handleDemoTrade("SELL")}
+                disabled={tradeControlsDisabled}
+                isSubmitting={isTradeSubmitting}
+                isConfirmationActive={isConfirmationActive}
+                isBeforeConfirmation={isBeforeConfirmation}
+              />
+              <TavusMentorPanel
+                activeScenarioEvent={activeScenarioEvent}
+                currentCandleIndex={Math.max(0, visibleCount - 1)}
+                replayResetKey={replayResetKey}
+              />
+              <AgentCommentaryPanel
+                activeEvent={activeScenarioEvent}
+                visibleCount={visibleCount}
+                totalCandles={allCandles.length}
+                isPlaying={isPlaying}
+                pulseKey={eventPulseKey}
+              />
+              <LessonTimeline
+                events={scalpScenarioEvents}
+                visibleCount={visibleCount}
+                activeEvent={activeScenarioEvent}
+              />
+              <div className="rounded-xl bg-zinc-900 border border-zinc-800 p-3 font-mono text-[10px] text-zinc-500 space-y-1">
+                <div className="text-zinc-400 text-xs font-bold uppercase tracking-widest mb-2">Replay Debug</div>
+                <div>Candle index: {Math.max(0, visibleCount - 1)}</div>
+                <div>Active event: {activeScenarioEvent?.type ?? "—"}</div>
+                <div>Visible candles: {visibleCount}</div>
+                <div>Levels shown: {[...visibleLevelKeys].join(", ") || "—"}</div>
+              </div>
+            </>
+          )}
 
           {/* Funnel indicators */}
           <div className="rounded-2xl bg-zinc-900 border border-zinc-800 p-5">
