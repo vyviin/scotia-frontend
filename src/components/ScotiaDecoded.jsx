@@ -27,9 +27,9 @@ const REPLAY_CANDLE_INTERVAL_MS = 2500;
 const REPLAY_EVENT_PAUSE_MS = 16000;
 
 // ─── Tiny sparkline SVG ──────────────────────────────────────────────────────
-function Sparkline({ data, color = "#22c55e", width = 80, height = 32 }) {
-  const min = Math.min(...data);
-  const max = Math.max(...data);
+function Sparkline({ data, color = "#22c55e", width = 80, height = 32, yMin, yMax }) {
+  const min = yMin ?? Math.min(...data);
+  const max = yMax ?? Math.max(...data);
   const range = max - min || 1;
   const pts = data.map((v, i) => {
     const x = (i / (data.length - 1)) * width;
@@ -188,6 +188,16 @@ const AI_MESSAGES = {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function ScotiaDecoded() {
+  const BASE_BALANCE = 640;
+  const BASE_DAYS = 45;
+  const MONTHLY_SITTING_RATE = 0.0000234375;
+  const ANNUAL_TFSA_RETURN = 0.07;
+  const HORIZON_OPTIONS = [
+    { id: "3m", label: "3M", months: 3 },
+    { id: "1y", label: "1Y", months: 12 },
+    { id: "5y", label: "5Y", months: 60 },
+  ];
+
   const [step, setStep] = useState(1);
   const [vibe, setVibe] = useState(null);
   const [activeTooltip, setActiveTooltip] = useState(null);
@@ -197,6 +207,9 @@ export default function ScotiaDecoded() {
   const [toastMsg, setToastMsg] = useState("");
   const [captionIdx, setCaptionIdx] = useState(0);
   const [aiTyping, setAiTyping] = useState(false);
+  const [reelMuted, setReelMuted] = useState(true);
+  const [moveAmount, setMoveAmount] = useState(100);
+  const [horizon, setHorizon] = useState("1y");
   const chatRef = useRef(null);
 
   const [allCandles, setAllCandles] = useState([]);
@@ -477,6 +490,21 @@ export default function ScotiaDecoded() {
     { id: 5, label: "First Move" },
   ];
 
+  const selectedHorizon = HORIZON_OPTIONS.find((h) => h.id === horizon) || HORIZON_OPTIONS[1];
+  const months = selectedHorizon.months;
+  const moveGrowth = Math.pow(1 + ANNUAL_TFSA_RETURN, months / 12);
+  const sittingGrowth = 1 + MONTHLY_SITTING_RATE * months;
+  const tfsaValue = moveAmount * moveGrowth;
+  const sittingValue = moveAmount * sittingGrowth;
+  const opportunityValue = Math.max(0, tfsaValue - sittingValue);
+  const annualizedSitting = BASE_BALANCE * (Math.pow(1 + MONTHLY_SITTING_RATE, 12) - 1);
+  const opportunityPct = sittingValue > 0 ? ((opportunityValue / sittingValue) * 100) : 0;
+  const tfsaSparkline = [0, 1, 2, 3, 4, 5, 6].map((i) => moveAmount * Math.pow(moveGrowth, i / 6));
+  const sittingSparkline = [0, 1, 2, 3, 4, 5, 6].map((i) => moveAmount * (1 + (sittingGrowth - 1) * (i / 6)));
+  const sparklineMin = Math.min(...sittingSparkline, ...tfsaSparkline);
+  const sparklineMax = Math.max(...sittingSparkline, ...tfsaSparkline);
+  const formatMoney = (n) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+
   return (
     <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-start font-sans">
       {/* ── Header ── */}
@@ -505,11 +533,15 @@ export default function ScotiaDecoded() {
             {/* ── STEP 1: Reel Feed ── */}
             {step === 1 && (
               <div className="relative w-full h-full bg-black flex flex-col" style={{ minHeight: 680 }}>
-                {/* Background gradient */}
-                <div className="absolute inset-0 bg-gradient-to-b from-purple-950/60 via-zinc-950/80 to-black z-0" />
-                {/* Fake video bg */}
-                <div className="absolute inset-0 z-0 opacity-30"
-                  style={{ background: "repeating-linear-gradient(135deg, #1e1b4b 0px, #2d1f5e 40px, #1e1b4b 80px)" }} />
+                <video
+                  className="absolute inset-0 z-0 w-full h-full object-cover"
+                  src="/PROMO REEL.mp4"
+                  autoPlay
+                  loop
+                  muted={reelMuted}
+                  playsInline
+                />
+                <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-black/40 to-black/75 z-0" />
 
                 {/* Status bar */}
                 <div className="relative z-10 flex justify-between items-center px-6 pt-10 pb-2 text-white text-xs font-semibold">
@@ -557,6 +589,12 @@ export default function ScotiaDecoded() {
                   <div className="flex items-center gap-2 text-zinc-400 text-xs">
                     <Music2 size={12} />
                     <span className="truncate">Money Moves — Scotia Originals 🎵</span>
+                    <button
+                      onClick={() => setReelMuted((m) => !m)}
+                      className="ml-auto rounded-md border border-white/20 px-2 py-0.5 text-[10px] font-bold text-white bg-white/10 hover:bg-white/20 transition-colors"
+                    >
+                      {reelMuted ? "Tap for sound" : "Sound on"}
+                    </button>
                   </div>
                 </div>
 
@@ -590,7 +628,7 @@ export default function ScotiaDecoded() {
                 <h2 className="text-2xl font-black text-zinc-900 leading-tight mb-2">
                   How are you feeling about investing <span className="text-red-600 italic">rn?</span>
                 </h2>
-                <p className="text-zinc-500 text-sm mb-6">No judgment. Your answer just helps us set the vibe for your journey.</p>
+                
 
                 <div className="space-y-3">
                   {[
@@ -635,31 +673,62 @@ export default function ScotiaDecoded() {
                 <div className="mb-2">
                   <span className="text-xs font-bold text-red-500 uppercase tracking-widest">Step 2 of 4 · Your Money</span>
                 </div>
-                <h2 className="text-xl font-black text-zinc-900 leading-tight mb-1">Here's what we found 👀</h2>
+          
                 <p className="text-sm text-zinc-600 mb-4 leading-relaxed">
-                  You've got <span className="font-black text-zinc-900">$640</span> in your chequing that's been sitting for <span className="font-black text-zinc-900">45 days</span>. Here's what happens if it keeps sitting vs if you move $100 of it.
+                  You've got <span className="font-black text-zinc-900">{formatMoney(BASE_BALANCE)}</span> in your chequing that's been sitting for <span className="font-black text-zinc-900">{BASE_DAYS} days</span>. Here's what happens if it keeps sitting vs if you move <span className="font-black text-zinc-900">{formatMoney(moveAmount)}</span> of it.
                 </p>
+
+                <div className="rounded-2xl bg-white border-2 border-zinc-200 p-3 mb-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs uppercase font-bold tracking-widest text-zinc-500">Move Amount</span>
+                    <span className="text-sm font-black text-zinc-900">{formatMoney(moveAmount)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="50"
+                    max={BASE_BALANCE}
+                    step="10"
+                    value={moveAmount}
+                    onChange={(e) => setMoveAmount(Number(e.target.value))}
+                    className="w-full accent-red-600"
+                  />
+                  <div className="flex justify-between text-[11px] text-zinc-400 font-mono mt-1">
+                    <span>$50</span><span>{formatMoney(BASE_BALANCE)}</span>
+                  </div>
+                </div>
+
+                <div className="flex gap-2 mb-4">
+                  {HORIZON_OPTIONS.map((option) => (
+                    <button
+                      key={option.id}
+                      onClick={() => setHorizon(option.id)}
+                      className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all duration-200 ${horizon === option.id ? "bg-red-600 text-white border-red-600" : "bg-white text-zinc-600 border-zinc-200 hover:border-zinc-400"}`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
 
                 <div className="grid grid-cols-2 gap-3 mb-4">
                   {/* Sitting card */}
                   <div className="rounded-2xl bg-white border-2 border-zinc-200 p-3">
                     <div className="text-xs font-bold text-zinc-400 uppercase mb-1">😴 Sitting</div>
-                    <div className="text-2xl font-black text-zinc-800">$640</div>
-                    <div className="text-xs text-zinc-500 mt-0.5">in 12 months</div>
+                    <div className="text-2xl font-black text-zinc-800 transition-all duration-500">{formatMoney(sittingValue)}</div>
+                    <div className="text-xs text-zinc-500 mt-0.5">if parked for {selectedHorizon.label}</div>
                     <div className="mt-3">
-                      <Sparkline data={[640, 640.01, 640.01, 640.02, 640.02, 640.02, 640.03]} color="#a1a1aa" />
+                      <Sparkline data={sittingSparkline} color="#a1a1aa" yMin={sparklineMin} yMax={sparklineMax} />
                     </div>
-                    <div className="mt-1 text-xs text-zinc-400 font-mono">+$0.18 interest 💀</div>
+                    <div className="mt-1 text-xs text-zinc-400 font-mono">~{formatMoney(annualizedSitting)}/yr interest 💀</div>
                   </div>
                   {/* Moving card */}
                   <div className="rounded-2xl bg-gradient-to-br from-red-50 to-orange-50 border-2 border-red-300 p-3">
                     <div className="text-xs font-bold text-red-500 uppercase mb-1">🚀 TFSA Move</div>
-                    <div className="text-2xl font-black text-red-600">$107</div>
-                    <div className="text-xs text-zinc-500 mt-0.5">$100 → in 12 mo</div>
+                    <div className="text-2xl font-black text-red-600 transition-all duration-500">{formatMoney(tfsaValue)}</div>
+                    <div className="text-xs text-zinc-500 mt-0.5">{formatMoney(moveAmount)} → in {selectedHorizon.label}</div>
                     <div className="mt-3">
-                      <Sparkline data={[100, 101, 102.2, 103.5, 104.1, 105.8, 107]} color="#ec1c24" />
+                      <Sparkline data={tfsaSparkline} color="#ec1c24" yMin={sparklineMin} yMax={sparklineMax} />
                     </div>
-                    <div className="mt-1 text-xs text-red-500 font-mono font-bold">+$7 tax-free ✅</div>
+                    <div className="mt-1 text-xs text-red-500 font-mono font-bold">+{formatMoney(opportunityValue)} tax-free edge ✅</div>
                   </div>
                 </div>
 
@@ -667,7 +736,7 @@ export default function ScotiaDecoded() {
                   <div className="flex items-start gap-2">
                     <Sparkles size={16} className="text-yellow-400 mt-0.5 flex-shrink-0" />
                     <p className="text-zinc-200 text-xs leading-relaxed">
-                      Bestie, $7 sounds small but that's <span className="text-yellow-300 font-bold">3,789% more growth</span> than doing nothing. And it compounds every year. This is the cheat code. 🔥
+                      In {selectedHorizon.label}, this is <span className="text-yellow-300 font-bold">{opportunityPct.toFixed(0)}% more growth</span> than doing nothing. And it compounds every year. 🔥
                     </p>
                   </div>
                 </div>
