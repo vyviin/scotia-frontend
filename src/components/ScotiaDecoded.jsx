@@ -182,6 +182,7 @@ export default function ScotiaDecoded() {
   const [toastMsg, setToastMsg] = useState("");
   const [captionIdx, setCaptionIdx] = useState(0);
   const [aiTyping, setAiTyping] = useState(false);
+  const [reelMuted, setReelMuted] = useState(true);
   const [moveAmount, setMoveAmount] = useState(100);
   const [horizon, setHorizon] = useState("1y");
   const chatRef = useRef(null);
@@ -294,11 +295,15 @@ export default function ScotiaDecoded() {
             {/* ── STEP 1: Reel Feed ── */}
             {step === 1 && (
               <div className="relative w-full h-full bg-black flex flex-col" style={{ minHeight: 680 }}>
-                {/* Background gradient */}
-                <div className="absolute inset-0 bg-gradient-to-b from-purple-950/60 via-zinc-950/80 to-black z-0" />
-                {/* Fake video bg */}
-                <div className="absolute inset-0 z-0 opacity-30"
-                  style={{ background: "repeating-linear-gradient(135deg, #1e1b4b 0px, #2d1f5e 40px, #1e1b4b 80px)" }} />
+                <video
+                  className="absolute inset-0 z-0 w-full h-full object-cover"
+                  src="/PROMO REEL.mp4"
+                  autoPlay
+                  loop
+                  muted={reelMuted}
+                  playsInline
+                />
+                <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-black/40 to-black/75 z-0" />
 
                 {/* Status bar */}
                 <div className="relative z-10 flex justify-between items-center px-6 pt-10 pb-2 text-white text-xs font-semibold">
@@ -346,6 +351,12 @@ export default function ScotiaDecoded() {
                   <div className="flex items-center gap-2 text-zinc-400 text-xs">
                     <Music2 size={12} />
                     <span className="truncate">Money Moves — Scotia Originals 🎵</span>
+                    <button
+                      onClick={() => setReelMuted((m) => !m)}
+                      className="ml-auto rounded-md border border-white/20 px-2 py-0.5 text-[10px] font-bold text-white bg-white/10 hover:bg-white/20 transition-colors"
+                    >
+                      {reelMuted ? "Tap for sound" : "Sound on"}
+                    </button>
                   </div>
                 </div>
 
